@@ -348,7 +348,6 @@ def add_random_objects(scene_struct, num_objects, args, camera):
 
     for _ in range(num_objects):
         size_name, r = random.choice(size_mapping)
-        # size_name, r = "one", 1
 
         # Spatial rejection‑sampling
         for attempt in range(args.max_retries):
@@ -362,43 +361,41 @@ def add_random_objects(scene_struct, num_objects, args, camera):
             return add_random_objects(scene_struct, num_objects, args, camera)
 
         # Choose random shape & colour
-        # if shape_color_combos is None:
-        #     obj_name, obj_name_out = random.choice(object_mapping)
-        #     color_name, rgba       = random.choice(list(color_name_to_rgba.items()))
-        # else:
-        #     obj_name_out, colors   = random.choice(shape_color_combos)
-        #     color_name             = random.choice(colors)
-        #     obj_name               = next(k for k, v in object_mapping if v == obj_name_out)
-        #     rgba                   = color_name_to_rgba[color_name]
-        obj_name, obj_name_out = random.choice(object_mapping)
+        if shape_color_combos is None:
+            obj_name, obj_name_out = random.choice(object_mapping)
+            color_name, rgba       = random.choice(list(color_name_to_rgba.items()))
+        else:
+            obj_name_out, colors   = random.choice(shape_color_combos)
+            color_name             = random.choice(colors)
+            obj_name               = next(k for k, v in object_mapping if v == obj_name_out)
+            rgba                   = color_name_to_rgba[color_name]
 
         # Cube diagonal adjustment
-        # if obj_name == 'Cube':
-        #     r /= math.sqrt(2)
+        if obj_name == 'Cube':
+            r /= math.sqrt(2)
 
         theta = 360.0 * random.random()
 
         # Add mesh
-        utils.add_object_glb(args.shape_dir, obj_name, r, (x, y), theta=theta)
-        # utils.add_object(args.shape_dir, obj_name, r, (x, y), theta=theta)
+        utils.add_object(args.shape_dir, obj_name, r, (x, y), theta=theta)
         obj = bpy.context.object
         blender_objects.append(obj)
         positions.append((x, y, r))
 
         # Random material
-        # mat_name, mat_name_out = random.choice(material_mapping)
-        # utils.add_material(mat_name, Color=rgba)
+        mat_name, mat_name_out = random.choice(material_mapping)
+        utils.add_material(mat_name, Color=rgba)
 
         # Record metadata
         pix = utils.get_camera_coords(camera, obj.location)
         objects.append({
             'shape':       obj_name_out,
             'size':        size_name,
-            # 'material':    mat_name_out,
+            'material':    mat_name_out,
             '3d_coords':   tuple(obj.location),
             'rotation':    theta,
-            'pixel_coords':pix,})
-            # 'color':       color_name})
+            'pixel_coords':pix,
+            'color':       color_name})
 
     # Visibility test
     if not check_visibility(blender_objects, args.min_pixels_per_object):

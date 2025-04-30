@@ -1,172 +1,195 @@
-# Copyright 2017-present, Facebook, Inc.
+# Copyright 2017‑present, Facebook, Inc.
 # All rights reserved.
 #
-# This source code is licensed under the BSD-style license found in the
-# LICENSE file in the root directory of this source tree. An additional grant
-# of patent rights can be found in the PATENTS file in the same directory.
+# Licensed under the BSD‑style license found in the LICENSE file in the root
+# directory of this source tree. An additional grant of patent rights can be
+# found in the PATENTS file in the same directory.
+"""Utility helpers updated for **Blender 3.x**.
+Only minimal API changes were made so the original CLEVR generator runs under
+modern Blender builds (2.93 LTS, 3.0+).
+- `Object.select`   ➜ `select_set()`
+- `scene.objects.active` ➜ `view_layer.objects.active`
+- Layer switching API removed; `set_layer` now toggles `hide_render`.
+- `primitive_plane_add` call remains in caller; no layer masks here.
+- Object appending rewritten with explicit `directory` & `filename` args.
+"""
 
-import sys, random, os
+from __future__ import annotations
+import sys, os, random
 import bpy, bpy_extras
+from mathutils import Vector
 
-
-"""
-Some utility functions for interacting with Blender
-"""
-
+# -----------------------------------------------------------------------------
+# Argument helpers (unchanged)
+# -----------------------------------------------------------------------------
 
 def extract_args(input_argv=None):
-  """
-  Pull out command-line arguments after "--". Blender ignores command-line flags
-  after --, so this lets us forward command line arguments from the blender
-  invocation to our own script.
-  """
-  if input_argv is None:
-    input_argv = sys.argv
-  output_argv = []
-  if '--' in input_argv:
-    idx = input_argv.index('--')
-    output_argv = input_argv[(idx + 1):]
-  return output_argv
-
+    """Return argv elements appearing after the first "--"."""
+    if input_argv is None:
+        input_argv = sys.argv
+    return input_argv[input_argv.index('--') + 1:] if '--' in input_argv else []
 
 def parse_args(parser, argv=None):
-  return parser.parse_args(extract_args(argv))
+    return parser.parse_args(extract_args(argv))
+
+# -----------------------------------------------------------------------------
+# Scene / object helpers
+# -----------------------------------------------------------------------------
+
+def delete_object(obj: bpy.types.Object) -> None:
+    """Delete *obj* from the current scene."""
+    bpy.ops.object.select_all(action='DESELECT')
+    obj.select_set(True)
+    bpy.context.view_layer.objects.active = obj
+    bpy.ops.object.delete()
 
 
-# I wonder if there's a better way to do this?
-def delete_object(obj):
-  """ Delete a specified blender object """
-  for o in bpy.data.objects:
-    o.select = False
-  obj.select = True
-  bpy.ops.object.delete()
+def get_camera_coords(cam: bpy.types.Object, pos: Vector):
+    """Return (px, py, pz) pixel coords of *pos* from *cam*."""
+    scene = bpy.context.scene
+    x, y, z = bpy_extras.object_utils.world_to_camera_view(scene, cam, pos)
+    scale   = scene.render.resolution_percentage / 100.0
+    w       = int(scale * scene.render.resolution_x)
+    h       = int(scale * scene.render.resolution_y)
+    return int(round(x * w)), int(round(h - y * h)), z
 
 
-def get_camera_coords(cam, pos):
-  """
-  For a specified point, get both the 3D coordinates and 2D pixel-space
-  coordinates of the point from the perspective of the camera.
+def set_layer(obj: bpy.types.Object, layer_idx: int) -> None:
+    """Legacy layer toggle – now approximated with hide_render."""
+    # Layer 0 (idx 0) => visible; anything else => hide from render
+    obj.hide_render = layer_idx != 0
 
-  Inputs:
-  - cam: Camera object
-  - pos: Vector giving 3D world-space position
+# -----------------------------------------------------------------------------
+# Asset loading / placement
+# -----------------------------------------------------------------------------
 
-  Returns a tuple of:
-  - (px, py, pz): px and py give 2D image-space coordinates; pz gives depth
-    in the range [-1, 1]
-  """
-  scene = bpy.context.scene
-  x, y, z = bpy_extras.object_utils.world_to_camera_view(scene, cam, pos)
-  scale = scene.render.resolution_percentage / 100.0
-  w = int(scale * scene.render.resolution_x)
-  h = int(scale * scene.render.resolution_y)
-  px = int(round(x * w))
-  py = int(round(h - y * h))
-  return (px, py, z)
+def add_object_glb(object_dir: str, name: str, scale: float, loc, *, theta=0):
+    """Load *.glb* object *name* from *object_dir* and place it."""
+    count = sum(o.name.startswith(name) for o in bpy.data.objects)
+
+    glb_path = name
+
+    bpy.ops.object.select_all(action='DESELECT')
+
+    bpy.ops.import_scene.gltf(filepath=glb_path)
+
+    new_objects = list(bpy.context.selected_objects)
+
+    if not new_objects:
+        raise RuntimeError(f"No objects selected after import of {name}. Assuming none were added.")
+
+    obj = None
+    if len(new_objects) > 1:
+        # print(f"Imported {len(new_objects)} objects for {name} (found via selection), joining them.")
+        mesh_objects = []
+        for o in new_objects:
+            if o.type == 'MESH':
+                mesh_objects.append(o)
+            else:
+                o.select_set(False)
+                # bpy.data.objects.remove(o, do_unlink=True)
+        bpy.context.view_layer.objects.active = mesh_objects[0]
+        bpy.ops.object.join()
+        obj = bpy.context.view_layer.objects.active
+    elif len(new_objects) == 1:
+        obj = new_objects[0]
+        bpy.context.view_layer.objects.active = obj
+
+    new_name = f"{name}_{count}"
+    obj.name = new_name
+    
+    # Transform
+    max_dim = max(obj.dimensions) if obj.dimensions else 0.0
+    norm_scale = 2.0 / max_dim if max_dim > 0 else 1.0
+    obj.scale = (norm_scale, norm_scale, norm_scale)
+    bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
+    bpy.context.view_layer.update()
+    
+    x, y = loc
+    # print(obj.rotation_euler)
+    # print(theta)
+    if obj.parent:
+        obj.parent.rotation_euler[2] = theta
+    else:
+        obj.rotation_euler[2] = theta
+    # obj.rotation_euler[2] = theta              # radians expected
+    # print(obj.rotation_euler)
+    # print(obj.parent)
+    # print(obj.constraints)
+    # print(obj.animation_data)
+    # exit()
+    obj.scale = (scale, scale, scale)
+    obj.location = (x, y, scale)      # z = scale to sit on ground
+
+def add_object(object_dir: str, name: str, scale: float, loc, *, theta=0):
+    """Append *name* mesh from *object_dir* and place it in the scene."""
+    # Count existing duplicates so we can give this instance a unique name
+    count = sum(o.name.startswith(name) for o in bpy.data.objects)
+
+    blend_path   = os.path.join(object_dir, f"{name}.blend")
+    obj_dir      = os.path.join(blend_path, "Object")  # section inside .blend
+
+    # Append the object
+    bpy.ops.wm.append(directory=obj_dir, filename=name)
+
+    # Rename & activate
+    new_name = f"{name}_{count}"
+    obj      = bpy.data.objects[name]
+    obj.name = new_name
+
+    bpy.ops.object.select_all(action='DESELECT')
+    obj.select_set(True)
+    bpy.context.view_layer.objects.active = obj
+
+    # Transform
+    x, y = loc
+    obj.rotation_euler[2] = theta               # radians expected
+    obj.scale             = (scale, scale, scale)
+    obj.location          = (x, y, scale)      # z = scale to sit on ground
 
 
-def set_layer(obj, layer_idx):
-  """ Move an object to a particular layer """
-  # Set the target layer to True first because an object must always be on
-  # at least one layer.
-  obj.layers[layer_idx] = True
-  for i in range(len(obj.layers)):
-    obj.layers[i] = (i == layer_idx)
+# -----------------------------------------------------------------------------
+# Material helpers
+# -----------------------------------------------------------------------------
+
+def load_materials(material_dir: str) -> None:
+    """Append all .blend NodeTree materials found in *material_dir*."""
+    for fn in os.listdir(material_dir):
+        if not fn.endswith('.blend'):
+            continue
+        name      = os.path.splitext(fn)[0]
+        ntree_dir = os.path.join(material_dir, fn, 'NodeTree')
+        bpy.ops.wm.append(directory=ntree_dir, filename=name)
 
 
-def add_object(object_dir, name, scale, loc, theta=0):
-  """
-  Load an object from a file. We assume that in the directory object_dir, there
-  is a file named "$name.blend" which contains a single object named "$name"
-  that has unit size and is centered at the origin.
+def add_material(name: str, **properties):
+    """Create a new material instance from pre‑loaded *name* group.
 
-  - scale: scalar giving the size that the object should be in the scene
-  - loc: tuple (x, y) giving the coordinates on the ground plane where the
-    object should be placed.
-  """
-  # First figure out how many of this object are already in the scene so we can
-  # give the new object a unique name
-  count = 0
-  for obj in bpy.data.objects:
-    if obj.name.startswith(name):
-      count += 1
+    The caller should have loaded NodeTree "name" via :func:`load_materials`.
+    Any keyword that matches a group input (e.g. ``Color=(r,g,b,a)``) will be
+    forwarded to that socket.
+    """
+    mat = bpy.data.materials.new(name=f"Material_{len(bpy.data.materials)}")
+    mat.use_nodes = True
 
-  filename = os.path.join(object_dir, '%s.blend' % name, 'Object', name)
-  bpy.ops.wm.append(filename=filename)
+    # Active object must exist
+    obj = bpy.context.active_object
+    if not obj:
+        raise RuntimeError("add_material() called with no active object")
+    obj.data.materials.clear()
+    obj.data.materials.append(mat)
 
-  # Give it a new name to avoid conflicts
-  new_name = '%s_%d' % (name, count)
-  bpy.data.objects[name].name = new_name
+    nodes = mat.node_tree.nodes
+    links = mat.node_tree.links
+    nodes.clear()
 
-  # Set the new object as active, then rotate, scale, and translate it
-  x, y = loc
-  bpy.context.scene.objects.active = bpy.data.objects[new_name]
-  bpy.context.object.rotation_euler[2] = theta
-  bpy.ops.transform.resize(value=(scale, scale, scale))
-  bpy.ops.transform.translate(value=(x, y, scale))
+    output = nodes.new('ShaderNodeOutputMaterial')
+    group  = nodes.new('ShaderNodeGroup')
+    group.node_tree = bpy.data.node_groups[name]
 
+    # Forward provided property values into matching inputs
+    for inp in group.inputs:
+        if inp.name in properties:
+            inp.default_value = properties[inp.name]
 
-def load_materials(material_dir):
-  """
-  Load materials from a directory. We assume that the directory contains .blend
-  files with one material each. The file X.blend has a single NodeTree item named
-  X; this NodeTree item must have a "Color" input that accepts an RGBA value.
-  """
-  for fn in os.listdir(material_dir):
-    if not fn.endswith('.blend'): continue
-    name = os.path.splitext(fn)[0]
-    filepath = os.path.join(material_dir, fn, 'NodeTree', name)
-    bpy.ops.wm.append(filename=filepath)
-
-
-def add_material(name, **properties):
-  """
-  Create a new material and assign it to the active object. "name" should be the
-  name of a material that has been previously loaded using load_materials.
-  """
-  # Figure out how many materials are already in the scene
-  mat_count = len(bpy.data.materials)
-
-  # Create a new material; it is not attached to anything and
-  # it will be called "Material"
-  bpy.ops.material.new()
-
-  # Get a reference to the material we just created and rename it;
-  # then the next time we make a new material it will still be called
-  # "Material" and we will still be able to look it up by name
-  mat = bpy.data.materials['Material']
-  mat.name = 'Material_%d' % mat_count
-
-  # Attach the new material to the active object
-  # Make sure it doesn't already have materials
-  obj = bpy.context.active_object
-  assert len(obj.data.materials) == 0
-  obj.data.materials.append(mat)
-
-  # Find the output node of the new material
-  output_node = None
-  for n in mat.node_tree.nodes:
-    if n.name == 'Material Output':
-      output_node = n
-      break
-
-  # Add a new GroupNode to the node tree of the active material,
-  # and copy the node tree from the preloaded node group to the
-  # new group node. This copying seems to happen by-value, so
-  # we can create multiple materials of the same type without them
-  # clobbering each other
-  group_node = mat.node_tree.nodes.new('ShaderNodeGroup')
-  group_node.node_tree = bpy.data.node_groups[name]
-
-  # Find and set the "Color" input of the new group node
-  for inp in group_node.inputs:
-    if inp.name in properties:
-      inp.default_value = properties[inp.name]
-
-  # Wire the output of the new group node to the input of
-  # the MaterialOutput node
-  mat.node_tree.links.new(
-      group_node.outputs['Shader'],
-      output_node.inputs['Surface'],
-  )
-
+    links.new(group.outputs['Shader'], output.inputs['Surface'])

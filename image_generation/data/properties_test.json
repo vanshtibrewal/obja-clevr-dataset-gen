@@ -1,0 +1,25 @@
+{
+  "shapes": {
+    "00dee4b2cc82344a475e57e885408546680a0f923e56062a54d23011797ccf4f_bird": "/data/vansh/3D-VQ-VAE/TRELLIS/datasets/ObjaBigger/raw/hf-objaverse-v1/glbs/000-000/00a776f578304cce8c096fc0034582ef.glb",
+    "a70a3e3ebf4f3467d78cf384c1b7cf74d267c65440d287bf0591561388c0587a_ostrich": "/data/vansh/3D-VQ-VAE/TRELLIS/datasets/ObjaBigger/raw/hf-objaverse-v1/glbs/000-000/00ac994290444f91bce94eb658936fe0.glb",
+    "ab72976dd5762ffbb5a7bc1958e06dfea42dc262261c95bab3af1ae6fb7e837c_speaker": "/data/vansh/3D-VQ-VAE/TRELLIS/datasets/ObjaBigger/raw/hf-objaverse-v1/glbs/000-000/00a66884dacb498b85701acd1cc77c5e.glb"
+  },
+  "colors": {
+    "gray": [87, 87, 87],
+    "red": [173, 35, 35],
+    "blue": [42, 75, 215],
+    "green": [29, 105, 20],
+    "brown": [129, 74, 25],
+    "purple": [129, 38, 192],
+    "cyan": [41, 208, 208],
+    "yellow": [255, 238, 51]
+  },
+  "materials": {
+    "rubber": "Rubber",
+    "metal": "MyMetal"
+  },
+  "sizes": {
+    "large": 0.7,
+    "small": 0.35
+  }
+}
