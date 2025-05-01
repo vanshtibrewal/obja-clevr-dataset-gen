@@ -245,9 +245,12 @@ def render_scene(args,
       prefs     = bpy.context.preferences
       cycles_prefs = prefs.addons['cycles'].preferences
       cycles_prefs.compute_device_type = 'CUDA'
+      cycles_prefs.refresh_devices()
       for d in cycles_prefs.devices:
-          d.use = True  # enable all CUDA devices
-      scene.cycles.device = 'GPU'
+        if d.type in {'CUDA', 'OPTIX'}:
+            d.use = True
+      for sc in bpy.data.scenes:
+        sc.cycles.device = 'GPU'
 
   # ---------------------------------------------------------------------
   # Scene layout metadata
