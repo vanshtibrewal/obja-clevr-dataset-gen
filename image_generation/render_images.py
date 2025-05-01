@@ -240,6 +240,9 @@ def render_scene(args,
   scene.cycles.samples = args.render_num_samples
   scene.cycles.transparent_min_bounces = args.render_min_bounces
   scene.cycles.transparent_max_bounces = args.render_max_bounces
+  
+  scene.cycles.sample_clamp_direct   = 0.0   # leave direct light unclamped
+  scene.cycles.sample_clamp_indirect = 10.0  # clamp very bright indirect paths
 
   if args.use_gpu:
       prefs     = bpy.context.preferences
