@@ -454,7 +454,22 @@ def check_visibility(blender_objects, min_pixels):
 
 
 def render_shadeless(blender_objects, path):
-    """Render without lights using per‑object emission materials."""
+    """Flat-shade render that counts visible pixels for each *logical* object.
+
+    Strategy
+    --------
+    1.  Backup current scene / Cycles settings.
+    2.  Hide key, fill, back lights + ground plane.
+    3.  For every imported object:
+        * Remember **all** original material‐slot -> material pointers.
+        * Build one flat-emission material in a unique random colour.
+        * Swap the material stored in **each existing slot** to that flat mat
+          (we do *not* clear slots, so every polygon keeps its old
+          material_index).
+    4.  Render once (1 sample, no lights).
+    5.  Restore the saved slot-pointer mapping for every object.
+    6.  Un-hide lights/ground and restore render settings.
+    """
     scene       = bpy.context.scene
     render_args = scene.render
 
@@ -475,34 +490,54 @@ def render_shadeless(blender_objects, path):
 
     # Assign unique emission mats
     object_colors = set()
-    old_mats      = []
+    old_slots_map = []      # list[ list[bpy.types.Material] ]
+
     for i, obj in enumerate(blender_objects):
-        old_mats.append(obj.data.materials[0])
-        mat = bpy.data.materials.new(name=f"Flat_{i}")
-        mat.use_nodes = True
-        nodes = mat.node_tree.nodes
-        links = mat.node_tree.links
+        # remember the full slot → material mapping
+        old_slots_map.append([slot.material for slot in obj.material_slots])
+
+        # build a flat-emission material in a unique colour
+        flat = bpy.data.materials.new(name=f"Flat_{i}")
+        flat.use_nodes = True
+        nodes = flat.node_tree.nodes
+        links = flat.node_tree.links
         nodes.clear()
-        output = nodes.new('ShaderNodeOutputMaterial')
-        emit   = nodes.new('ShaderNodeEmission')
-        # unique random colour
+        output = nodes.new("ShaderNodeOutputMaterial")
+        emit   = nodes.new("ShaderNodeEmission")
+
         while True:
             r, g, b = random.random(), random.random(), random.random()
             if (r, g, b) not in object_colors:
                 break
-        emit.inputs['Color'].default_value = (r, g, b, 1)
-        links.new(emit.outputs['Emission'], output.inputs['Surface'])
-        object_colors.add((r, g, b, 1))
-        obj.data.materials[0] = mat
+        emit.inputs["Color"].default_value = (r, g, b, 1.0)
+        links.new(emit.outputs["Emission"], output.inputs["Surface"])
+        object_colors.add((r, g, b, 1.0))
 
-    # Render
+        # swap – **do not clear** slots, just repoint them
+        if not obj.material_slots:                         # mesh had no slots
+            obj.data.materials.append(flat)
+        for slot in obj.material_slots:
+            slot.material = flat
+
+    # ──────────────────────────────────────────────
+    # 4. quick render
+    # ──────────────────────────────────────────────
     bpy.ops.render.render(write_still=True)
 
-    # Restore mats
-    for obj, mat in zip(blender_objects, old_mats):
-        obj.data.materials[0] = mat
+    # ──────────────────────────────────────────────
+    # 5. restore original material pointers
+    # ──────────────────────────────────────────────
+    for obj, old_mats in zip(blender_objects, old_slots_map):
+        # add slots if the mesh originally had more than it does now
+        while len(obj.material_slots) < len(old_mats):
+            obj.data.materials.append(None)
 
-    # Un‑hide lights & ground
+        for slot, original in zip(obj.material_slots, old_mats):
+            slot.material = original
+
+    # ──────────────────────────────────────────────
+    # 6. un-hide lights / restore render settings
+    # ──────────────────────────────────────────────
     for obj in hidden_objs:
         obj.hide_render = False
 
