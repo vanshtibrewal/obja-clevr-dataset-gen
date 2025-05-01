@@ -376,7 +376,10 @@ def add_random_objects(scene_struct, num_objects, args, camera):
         # if obj_name == 'Cube':
         #     r /= math.sqrt(2)
 
-        theta = 360.0 * random.random()
+        # theta = 360.0 * random.random()
+        # sample radian
+        theta = random.uniform(-math.pi, math.pi)
+
 
         # Add mesh
         utils.add_object_glb(args.shape_dir, obj_name, r, (x, y), theta=theta)

@@ -17,7 +17,7 @@ modern Blender builds (2.93 LTS, 3.0+).
 from __future__ import annotations
 import sys, os, random
 import bpy, bpy_extras
-from mathutils import Vector
+from mathutils import Vector, Matrix
 
 # -----------------------------------------------------------------------------
 # Argument helpers (unchanged)
@@ -63,6 +63,8 @@ def set_layer(obj: bpy.types.Object, layer_idx: int) -> None:
 # Asset loading / placement
 # -----------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# helper --------------------------------------------------------------------
 def add_object_glb(object_dir: str, name: str, scale: float, loc, *, theta=0):
     """Load *.glb* object *name* from *object_dir* and place it."""
     count = sum(o.name.startswith(name) for o in bpy.data.objects)
@@ -80,14 +82,12 @@ def add_object_glb(object_dir: str, name: str, scale: float, loc, *, theta=0):
 
     obj = None
     if len(new_objects) > 1:
-        # print(f"Imported {len(new_objects)} objects for {name} (found via selection), joining them.")
         mesh_objects = []
         for o in new_objects:
             if o.type == 'MESH':
                 mesh_objects.append(o)
             else:
                 o.select_set(False)
-                # bpy.data.objects.remove(o, do_unlink=True)
         bpy.context.view_layer.objects.active = mesh_objects[0]
         bpy.ops.object.join()
         obj = bpy.context.view_layer.objects.active
@@ -97,29 +97,40 @@ def add_object_glb(object_dir: str, name: str, scale: float, loc, *, theta=0):
 
     new_name = f"{name}_{count}"
     obj.name = new_name
-    
+
+    # ——— set up for a Z rotation ———
+    obj.rotation_mode    = 'XYZ'
+
+    # ------------------------------------------------------------
+    # 2.  world-Z spin  (matrix-world multiplication → children safe)
+    # ------------------------------------------------------------
+    theta_rad   = theta # math.radians(theta)
+    Rz_world    = Matrix.Rotation(theta_rad, 4, 'Z')
+    obj.matrix_world = Rz_world @ obj.matrix_world
+
     # Transform
     max_dim = max(obj.dimensions) if obj.dimensions else 0.0
-    norm_scale = 2.0 / max_dim if max_dim > 0 else 1.0
+    norm_scale = 2.5 / max_dim if max_dim > 0 else 1.0
     obj.scale = (norm_scale, norm_scale, norm_scale)
     bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
     bpy.context.view_layer.update()
-    
+
     x, y = loc
-    # print(obj.rotation_euler)
-    # print(theta)
+    # ——— absolute drop-to-ground in world space ———
+    # 1) find lowest world‐Z of the mesh:
+    bbox_world = [obj.matrix_world @ Vector(corner) for corner in obj.bound_box]
+    min_z = min(v.z for v in bbox_world)
+
+    # 2) build the new desired world‐location:
+    world_old = obj.matrix_world.to_translation()
+    world_new = Vector((x, y, world_old.z - min_z))
+
+    # 3) if parented, convert world_new → local coords before assigning:
     if obj.parent:
-        obj.parent.rotation_euler[2] = theta
+        obj.location = obj.parent.matrix_world.inverted() @ world_new
     else:
-        obj.rotation_euler[2] = theta
-    # obj.rotation_euler[2] = theta              # radians expected
-    # print(obj.rotation_euler)
-    # print(obj.parent)
-    # print(obj.constraints)
-    # print(obj.animation_data)
-    # exit()
-    obj.scale = (scale, scale, scale)
-    obj.location = (x, y, scale)      # z = scale to sit on ground
+        obj.location = world_new
+
 
 def add_object(object_dir: str, name: str, scale: float, loc, *, theta=0):
     """Append *name* mesh from *object_dir* and place it in the scene."""
