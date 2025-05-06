@@ -404,7 +404,8 @@ def add_random_objects(scene_struct, num_objects, args, camera):
             'shape':       obj_name_out,
             'size':        size_name,
             # 'material':    mat_name_out,
-            '3d_coords':   tuple(obj.location),
+            '3d_coords': [x, y, 0.0],
+            '3d_coords_transformed':   tuple(obj.location),
             'rotation':    theta,
             'pixel_coords':pix,})
             # 'color':       color_name})
