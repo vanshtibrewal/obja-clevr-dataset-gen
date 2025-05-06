@@ -388,7 +388,8 @@ def add_random_objects(scene_struct, num_objects, args, camera, shape_metadata):
         pix = utils.get_camera_coords(camera, obj.location)
         objects.append({
             'shape':       obj_name_out,
-            '3d_coords':   tuple(obj.location),
+            '3d_coords': [x, y, 0.0],
+            '3d_coords_transformed':   tuple(obj.location),
             'rotation':    theta,
             'pixel_coords':pix,})
 
