@@ -22,7 +22,7 @@ Run with:
 """
 
 from __future__ import print_function
-import math, sys, random, argparse, json, os, tempfile
+import math, sys, random, argparse, json, os, tempfile, csv
 from datetime import datetime as dt
 from collections import Counter
 
@@ -157,7 +157,9 @@ parser.add_argument('--render_tile_size', default=256, type=int,
          "while larger tile sizes may be optimal for GPU-based rendering.")
 
 def main(args):
-  num_digits = 6
+  random.seed(args.start_idx + int(dt.now().timestamp()))
+
+  num_digits = 7
   prefix = '%s_%s_' % (args.filename_prefix, args.split)
   img_template = '%s%%0%dd.png' % (prefix, num_digits)
   scene_template = '%s%%0%dd.json' % (prefix, num_digits)
@@ -182,6 +184,18 @@ def main(args):
     if args.save_blendfiles == 1:
       blend_path = blend_template % (i + args.start_idx)
     num_objects = random.randint(args.min_objects, args.max_objects)
+
+    with open(args.properties_json) as f:
+        props = json.load(f)
+    shape_metadata = []
+    csv_path = props['shapes']
+    with open(csv_path, 'r', newline='') as csvfile:
+        reader = csv.DictReader(csvfile)
+        if 'sha256' not in reader.fieldnames or 'local_path' not in reader.fieldnames:
+                raise ValueError(f"CSV file {csv_path} must contain 'sha256' and 'local_path' columns.")
+        for row in reader:
+            shape_metadata.append({'sha': row['sha256'], 'local_path': row['local_path']})
+
     render_scene(args,
       num_objects=num_objects,
       output_index=(i + args.start_idx),
@@ -189,6 +203,7 @@ def main(args):
       output_image=img_path,
       output_scene=scene_path,
       output_blendfile=blend_path,
+      shape_metadata=shape_metadata
     )
 
   # After rendering all images, combine the JSON files for each scene into a
@@ -218,6 +233,7 @@ def render_scene(args,
     output_image='render.png',
     output_scene='render_json',
     output_blendfile=None,
+    shape_metadata=[]
   ):
 
   # Load the main blendfile
@@ -316,7 +332,7 @@ def render_scene(args,
               obj.location.z += rand(jitter)
 
   # Populate scene with random objects
-  objs, blender_objs = add_random_objects(scene_struct, num_objects, args, cam)
+  objs, blender_objs = add_random_objects(scene_struct, num_objects, args, cam, shape_metadata)
 
   # Render final image
   scene_struct['objects']       = objs
@@ -335,26 +351,12 @@ def render_scene(args,
 # Object placement helpers
 # -----------------------------------------------------------------------------
 
-def add_random_objects(scene_struct, num_objects, args, camera):
+def add_random_objects(scene_struct, num_objects, args, camera, shape_metadata):
     """Place non‑intersecting random objects into the current scene."""
-
-    with open(args.properties_json) as f:
-        props = json.load(f)
-    color_name_to_rgba = {name: [c / 255.0 for c in rgb] + [1.0] for name, rgb in props['colors'].items()}
-    material_mapping   = [(v, k) for k, v in props['materials'].items()]
-    object_mapping     = [(v, k) for k, v in props['shapes'   ].items()]
-    size_mapping       = list(props['sizes'].items())
-
-    shape_color_combos = None
-    if args.shape_color_combos_json:
-        with open(args.shape_color_combos_json) as f:
-            shape_color_combos = list(json.load(f).items())
-
     positions, objects, blender_objects = [], [], []
+    r = 1.0
 
     for _ in range(num_objects):
-        size_name, r = random.choice(size_mapping)
-        # size_name, r = "one", 1
 
         # Spatial rejection‑sampling
         for attempt in range(args.max_retries):
@@ -365,55 +367,36 @@ def add_random_objects(scene_struct, num_objects, args, camera):
             # Could not place – reset scene and retry recursively
             for o in blender_objects:
                 utils.delete_object(o)
-            return add_random_objects(scene_struct, num_objects, args, camera)
+            return add_random_objects(scene_struct, num_objects, args, camera, shape_metadata)
 
-        # Choose random shape & colour
-        # if shape_color_combos is None:
-        #     obj_name, obj_name_out = random.choice(object_mapping)
-        #     color_name, rgba       = random.choice(list(color_name_to_rgba.items()))
-        # else:
-        #     obj_name_out, colors   = random.choice(shape_color_combos)
-        #     color_name             = random.choice(colors)
-        #     obj_name               = next(k for k, v in object_mapping if v == obj_name_out)
-        #     rgba                   = color_name_to_rgba[color_name]
-        obj_name, obj_name_out = random.choice(object_mapping)
+        # Choose random shape from the loaded metadata
+        selected_shape = random.choice(shape_metadata)
+        obj_name = selected_shape['local_path']  # Path to the .glb file
+        obj_name_out = selected_shape['sha']     # Identifier for the scene JSON
 
-        # Cube diagonal adjustment
-        # if obj_name == 'Cube':
-        #     r /= math.sqrt(2)
-
-        # theta = 360.0 * random.random()
         # sample radian
         theta = random.uniform(-math.pi, math.pi)
 
-
         # Add mesh
-        utils.add_object_glb(args.shape_dir, obj_name, r, (x, y), theta=theta)
-        # utils.add_object(args.shape_dir, obj_name, r, (x, y), theta=theta)
+        utils.add_object_glb(obj_name, (x, y), theta=theta)
+
         obj = bpy.context.object
         blender_objects.append(obj)
         positions.append((x, y, r))
-
-        # Random material
-        # mat_name, mat_name_out = random.choice(material_mapping)
-        # utils.add_material(mat_name, Color=rgba)
 
         # Record metadata
         pix = utils.get_camera_coords(camera, obj.location)
         objects.append({
             'shape':       obj_name_out,
-            'size':        size_name,
-            # 'material':    mat_name_out,
             '3d_coords':   tuple(obj.location),
             'rotation':    theta,
             'pixel_coords':pix,})
-            # 'color':       color_name})
 
     # Visibility test
     if not check_visibility(blender_objects, args.min_pixels_per_object):
         for o in blender_objects:
             utils.delete_object(o)
-        return add_random_objects(scene_struct, num_objects, args, camera)
+        return add_random_objects(scene_struct, num_objects, args, camera, shape_metadata)
 
     return objects, blender_objects
 

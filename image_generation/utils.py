@@ -65,7 +65,7 @@ def set_layer(obj: bpy.types.Object, layer_idx: int) -> None:
 
 # ---------------------------------------------------------------------------
 # helper --------------------------------------------------------------------
-def add_object_glb(object_dir: str, name: str, scale: float, loc, *, theta=0):
+def add_object_glb(name: str, loc, *, theta=0):
     """Load *.glb* object *name* from *object_dir* and place it."""
     count = sum(o.name.startswith(name) for o in bpy.data.objects)
 
