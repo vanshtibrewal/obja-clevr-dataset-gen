@@ -138,7 +138,7 @@ def main(args):
     if not os.path.isdir(args.output_scene_dir):
         os.makedirs(args.output_scene_dir)
     if args.save_blendfiles == 1 and not os.path.isdir(args.output_blend_dir):
-        os.makedirs(args.output_blend_dir)
+        os.makedirs(args.output_blend_dir, exist_ok=True)
     
     # Load the JSON file containing scene definitions
     print(f"Loading scene definitions from {args.coords_json}")
@@ -168,16 +168,19 @@ def main(args):
             print(f"Warning: Scene directory {scene_dir} not found. Skipping scene {scene_key}.")
             continue
         
-        # Create output filenames
-        prefix = scene_key
-        img_path = os.path.join(args.output_image_dir, f"{prefix}.png")
-        scene_path = os.path.join(args.output_scene_dir, f"{prefix}.json")
-        all_scene_paths.append(scene_path)
-        
+        # Create scene-specific output subdirectories
+        scene_img_dir = os.path.join(args.output_image_dir, scene_key)
+        scene_json_dir = os.path.join(args.output_scene_dir, scene_key)
+        os.makedirs(scene_img_dir, exist_ok=True)
+        os.makedirs(scene_json_dir, exist_ok=True)
+
         blend_path = None
         if args.save_blendfiles == 1:
-            blend_path = os.path.join(args.output_blend_dir, f"{prefix}.blend")
-        
+            # Save blend file per scene key in its own subdir within blend dir
+            scene_blend_dir = os.path.join(args.output_blend_dir, scene_key)
+            os.makedirs(scene_blend_dir, exist_ok=True)
+            blend_path = os.path.join(scene_blend_dir, f"{scene_key}.blend")
+
         # Get the .glb files in the scene directory
         glb_files = sorted(glob.glob(os.path.join(scene_dir, '*.glb')))
         
@@ -188,30 +191,27 @@ def main(args):
         
         print(f"Rendering scene {scene_key} ({output_index})")
         
-        # Render the scene
+        # Render the scene from multiple angles
         render_scene(
             args,
             glb_files=glb_files,
             object_coords=scene_data['objects'],
             output_index=output_index,
             output_split=args.split,
-            output_image=img_path,
-            output_scene=scene_path,
+            base_output_image_dir=args.output_image_dir, # Pass base dirs
+            base_output_scene_dir=args.output_scene_dir,
             output_blendfile=blend_path,
             scene_name=scene_key
         )
         
         output_index += 1
     
-    # # After rendering all images, combine the JSON files for each scene into a single JSON file
+    # # Combined JSON generation is commented out as output structure changed
     # all_scenes = []
     # for scene_path in all_scene_paths:
     #     if os.path.exists(scene_path):
     #         with open(scene_path, 'r') as f:
     #             all_scenes.append(json.load(f))
-    #     else:
-    #         print(f"Warning: Scene file {scene_path} not found, skipping in combined output.")
-    
     # output = {
     #     'info': {
     #         'date': args.date,
@@ -221,20 +221,20 @@ def main(args):
     #     },
     #     'scenes': all_scenes
     # }
-    
     # print(f"Writing combined scene data to {args.output_scene_file}")
     # with open(args.output_scene_file, 'w') as f:
     #     json.dump(output, f)
 
 def render_scene(args,
                  glb_files=[],
-                 object_coords=[],
+                 object_coords=[], # noqa: B006
                  output_index=0,
                  output_split='none',
-                 output_image='render.png',
-                 output_scene='render_json',
+                 base_output_image_dir='../output/images/', # Renamed arg
+                 base_output_scene_dir='../output/scenes/', # Renamed arg
                  output_blendfile=None,
                  scene_name='scene'):
+    """Renders a single scene from 4 different camera angles."""
 
     # Load the main blendfile
     bpy.ops.wm.open_mainfile(filepath=args.base_scene_blendfile)
@@ -246,7 +246,7 @@ def render_scene(args,
     scene = bpy.context.scene
     render_args = scene.render
     render_args.engine = "CYCLES"
-    render_args.filepath = output_image
+    # render_args.filepath set per angle later
     render_args.resolution_x = args.width
     render_args.resolution_y = args.height
     render_args.resolution_percentage = 100
@@ -269,55 +269,42 @@ def render_scene(args,
         for sc in bpy.data.scenes:
             sc.cycles.device = 'GPU'
 
+    # Calculate scene-specific output paths
+    scene_img_dir = os.path.join(base_output_image_dir, scene_name)
+    scene_json_dir = os.path.join(base_output_scene_dir, scene_name)
+    # Directories are already created in main()
+
     # ---------------------------------------------------------------------
     # Scene layout metadata
     # ---------------------------------------------------------------------
-    scene_struct = {
+    base_scene_struct = { # Base structure, angle-specific details added later
         'split': output_split,
-        'image_index': output_index,
-        'image_filename': os.path.basename(output_image),
-        'objects': [],
-        'directions': {},
+        'image_index': output_index, # Index of the scene (group of angles)
         'scene_name': scene_name,
-    }
+        'objects': [], # Object info (except pixel coords) filled by add_specified_objects
+        'directions': {}, # Calculated per angle
+        'relationships': {} # Calculated per angle
+    } # noqa: E501
 
-    # Put a plane on the ground so we can compute cardinal directions
+    # Put a plane on the ground so we can compute cardinal directions later
     bpy.ops.mesh.primitive_plane_add(size=10)
-    plane = bpy.context.object
+    plane = bpy.context.object # Keep reference for cleanup
 
     def rand(L):
         return 2.0 * L * (random.random() - 0.5)
 
-    # Add random jitter to camera position
     cam = scene.objects['Camera']
-    if args.camera_jitter:
-        cam.location.x += rand(args.camera_jitter)
-        cam.location.y += rand(args.camera_jitter)
-        cam.location.z += rand(args.camera_jitter)
+    # Camera jitter is removed for predictable angles
+    # if args.camera_jitter: ...
 
-    # Local axes on ground plane
-    plane_normal = plane.data.vertices[0].normal
-    quat = cam.matrix_world.to_quaternion()
-    cam_behind = (quat @ Vector((0, 0, -1))).normalized()
-    cam_left = (quat @ Vector((-1, 0, 0))).normalized()
-    cam_up = (quat @ Vector((0, 1, 0))).normalized()
+    # Store initial camera state for 'angle_base'
+    initial_cam_location = cam.location.copy()
+    initial_cam_rotation_euler = cam.rotation_euler.copy()
 
-    plane_behind = (cam_behind - cam_behind.project(plane_normal)).normalized()
-    plane_left = (cam_left - cam_left.project(plane_normal)).normalized()
-    plane_up = cam_up.project(plane_normal).normalized()
-
-    # Clean up helper plane
-    utils.delete_object(plane)
-
-    # Store directions
-    scene_struct['directions'] = {
-        'behind': tuple(plane_behind),
-        'front': tuple(-plane_behind),
-        'left': tuple(plane_left),
-        'right': tuple(-plane_left),
-        'above': tuple(plane_up),
-        'below': tuple(-plane_up),
-    }
+    # Create an empty object at the origin for the camera to track (for the 4 cardinal angles)
+    bpy.ops.object.empty_add(location=(0, 0, 0))
+    target_empty = bpy.context.object
+    target_empty.name = "Camera_Target"
 
     # Jitter lights (object names come from base_scene.blend)
     for light_name, jitter in [("Lamp_Key", args.key_light_jitter),
@@ -331,27 +318,168 @@ def render_scene(args,
                 obj.location.z += rand(jitter)
 
     # Populate scene with specified objects
-    objs, blender_objs = add_specified_objects(scene_struct, glb_files, object_coords, args, cam)
+    # Pass base_scene_struct - objects list will be populated
+    # Do not pass camera - pixel coords calculated per angle
+    objs, blender_objs = add_specified_objects(base_scene_struct, glb_files, object_coords, args) # noqa: E501
 
     # Check if we successfully placed all objects
     if objs is None or blender_objs is None:
         print(f"Warning: Failed to place objects for scene {scene_name}. Skipping.")
+        utils.delete_object(target_empty) # Clean up empty
         return
 
-    # Render final image
-    scene_struct['objects'] = objs
-    scene_struct['relationships'] = compute_all_relationships(scene_struct)
-    bpy.ops.render.render(write_still=True)
+    # Store placed object data (without pixel coords yet) in base struct
+    base_scene_struct['objects'] = objs
 
-    # Save per‑image JSON
-    with open(output_scene, "w") as f:
-        json.dump(scene_struct, f, indent=2)
-
-    # Optionally save the .blend
+    # Optionally save the .blend file *before* the camera angle loop
+    # Saves the scene with objects placed, camera constrained but at its initial position
     if output_blendfile:
+        print(f"  Saving blend file to {output_blendfile}")
         bpy.ops.wm.save_as_mainfile(filepath=output_blendfile)
 
-def add_specified_objects(scene_struct, glb_files, object_coords, args, camera):
+    # --- Render 'angle_base' (original camera position) ---
+    print(f"    Angle base")
+    cam.location = initial_cam_location
+    cam.rotation_euler = initial_cam_rotation_euler
+    # Remove 'Track To' constraint if it exists (e.g., from base scene or previous logic)
+    for c in list(cam.constraints): # Iterate over a copy
+        if c.type == 'TRACK_TO':
+            cam.constraints.remove(c)
+    bpy.context.view_layer.update()
+
+    angle_base_scene_struct = json.loads(json.dumps(base_scene_struct))
+    angle_base_prefix = f"{scene_name}_angle_base"
+    angle_base_img_path = os.path.join(scene_img_dir, f"{angle_base_prefix}.png")
+    angle_base_scene_path = os.path.join(scene_json_dir, f"{angle_base_prefix}.json")
+
+    render_args.filepath = angle_base_img_path
+    angle_base_scene_struct['image_filename'] = os.path.basename(angle_base_img_path)
+    angle_base_scene_struct['camera_angle_degrees'] = 'base' # Indicate base angle
+    angle_base_scene_struct['camera_location'] = tuple(cam.location)
+    angle_base_scene_struct['camera_rotation_euler'] = tuple(cam.rotation_euler)
+
+    for i, obj_info in enumerate(angle_base_scene_struct['objects']):
+        blender_obj = blender_objs[i]
+        try:
+            obj_info['pixel_coords'] = utils.get_camera_coords(cam, blender_obj.location)
+        except Exception as e:
+            print(f"Error getting pixel coords for object {i} at angle_base: {e}")
+            obj_info['pixel_coords'] = [-1,-1,-1]
+
+    # Cardinal directions for 'angle_base' (original method)
+    bpy.ops.mesh.primitive_plane_add(size=5, location=(0,0,-0.1)) # Temp plane
+    temp_plane_obj = bpy.context.object
+    # The plane added by primitive_plane_add is at world origin, Z up.
+    plane_normal_vec = Vector((0.0, 0.0, 1.0)) # Safer assumption for flat ground
+
+    quat_base = cam.matrix_world.to_quaternion()
+    cam_forward_base = (quat_base @ Vector((0, 0, -1))).normalized()
+    cam_left_base = (quat_base @ Vector((-1, 0, 0))).normalized()
+
+    # Project onto the ground plane (XY plane for 'front', 'left')
+    dir_front_base = (cam_forward_base - cam_forward_base.project(plane_normal_vec)).normalized()
+    dir_left_base = (cam_left_base - cam_left_base.project(plane_normal_vec)).normalized()
+    
+    angle_base_scene_struct['directions'] = {
+        'front': tuple(dir_front_base),
+        'behind': tuple(-dir_front_base),
+        'left': tuple(dir_left_base),
+        'right': tuple(-dir_left_base),
+    }
+    utils.delete_object(temp_plane_obj)
+
+    angle_base_scene_struct['relationships'] = compute_all_relationships(angle_base_scene_struct)
+    bpy.ops.render.render(write_still=True)
+    with open(angle_base_scene_path, "w") as f:
+        json.dump(angle_base_scene_struct, f, indent=2)
+    # --- End Render 'angle_base' ---
+
+    # --- Render 4 Cardinal Angles --- 
+    # Now, set up Track To constraint for the 4 cardinal angles
+    print(f"  Setting up tracking constraint for cardinal angles...")
+    constraint = cam.constraints.new(type='TRACK_TO')
+    constraint.target = target_empty # This should now work
+    constraint.track_axis = 'TRACK_NEGATIVE_Z'
+    constraint.up_axis = 'UP_Y'
+
+    # Define camera positions (radius, height, angles) for the 4 cardinal views
+    cam_dist = 7.5 # Default distance in base scene
+    cam_height = 6.0 # Slightly lower than default cam Z=10, adjust as needed
+    angles_deg = [0, 90, 180, 270]
+    angles_rad = [math.radians(d) for d in angles_deg]
+
+    for angle_idx, angle_rad in enumerate(angles_rad):
+        print(f"    Angle {angle_idx} ({angles_deg[angle_idx]} deg)")
+        # Position camera
+        cam_x = cam_dist * math.cos(angle_rad)
+        cam_y = cam_dist * math.sin(angle_rad)
+        cam.location = (cam_x, cam_y, cam_height)
+        bpy.context.view_layer.update() # Force constraint update for correct rotation
+
+        # Create a deep copy of the base structure for this angle
+        # Using json loads/dumps for simplicity with nested dicts/lists
+        angle_scene_struct = json.loads(json.dumps(base_scene_struct))
+
+        # Define output paths for this angle
+        angle_prefix = f"{scene_name}_angle_{angle_idx}"
+        angle_img_path = os.path.join(scene_img_dir, f"{angle_prefix}.png")
+        angle_scene_path = os.path.join(scene_json_dir, f"{angle_prefix}.json")
+
+        # Update render path
+        render_args.filepath = angle_img_path
+
+        # Update scene struct with angle-specific info
+        angle_scene_struct['image_filename'] = os.path.basename(angle_img_path)
+        angle_scene_struct['camera_angle_degrees'] = angles_deg[angle_idx]
+        angle_scene_struct['camera_location'] = tuple(cam.location)
+        angle_scene_struct['camera_rotation_euler'] = tuple(cam.rotation_euler)
+
+        # Calculate pixel coordinates for objects from this angle
+        # We need the actual blender objects to get updated locations if they were moved/snapped
+        for i, obj_info in enumerate(angle_scene_struct['objects']):
+            blender_obj = blender_objs[i] # Assumes blender_objs order matches objs
+            obj_info['pixel_coords'] = utils.get_camera_coords(cam, blender_obj.location)
+
+        # Calculate cardinal directions based on current camera view
+        # Re-create a temporary plane to calculate ground-projected directions
+        bpy.ops.mesh.primitive_plane_add(size=5, location=(0,0,-0.1)) # Temp plane below origin
+        plane = bpy.context.object
+        # Use a fixed plane normal assuming flat ground
+        plane_normal = Vector((0.0, 0.0, 1.0))
+        # Get camera orientation vectors
+        quat = cam.matrix_world.to_quaternion()
+        cam_forward = (quat @ Vector((0, 0, -1))).normalized()
+        cam_left = (quat @ Vector((-1, 0, 0))).normalized()
+        # Project onto the ground plane (XY plane)
+        # Scene 'front' is direction camera looks projected onto ground
+        plane_front = (cam_forward - cam_forward.project(plane_normal)).normalized() # plane_normal is (0,0,1)
+        plane_left_dir = (cam_left - cam_left.project(plane_normal)).normalized() # Renamed to avoid conflict
+        
+        # Store directions 
+        angle_scene_struct['directions'] = {
+            'front': tuple(plane_front),
+            'behind': tuple(-plane_front),
+            'left': tuple(plane_left_dir), # Use renamed variable
+            'right': tuple(-plane_left_dir), # Use renamed variable
+            # 'above': tuple(plane_normal), # Assuming world Z is up
+            # 'below': tuple(-plane_normal), # Assuming world Z is up
+        }
+        # utils.delete_object(plane) # Clean up temp plane # This was for the old per-angle plane - REMOVED
+
+        # Calculate relationships for this angle using the calculated directions
+        angle_scene_struct['relationships'] = compute_all_relationships(angle_scene_struct)
+
+        # Render final image for this angle
+        bpy.ops.render.render(write_still=True)
+
+        # Save per-angle JSON
+        with open(angle_scene_path, "w") as f:
+            json.dump(angle_scene_struct, f, indent=2)
+
+    # Clean up the tracking empty AFTER all rendering is done
+    utils.delete_object(target_empty)
+
+def add_specified_objects(scene_struct, glb_files, object_coords, args): # Removed camera param
     """Place objects at specified positions from the provided glb files."""
     objects, blender_objects = [], []
     
@@ -382,14 +510,14 @@ def add_specified_objects(scene_struct, glb_files, object_coords, args, camera):
             blender_objects.append(obj)
             
             # Record metadata for this object
-            pix = utils.get_camera_coords(camera, obj.location)
+            # Pixel coords calculated later per angle in render_scene loop
             objects.append({
                 'shape': os.path.basename(glb_file),
-                '3d_coords': [x, y, 0.0],
-                '3d_coords_transformed': tuple(obj.location),
+                '3d_coords': [x, y, 0.0], # Original specified coords
+                '3d_coords_transformed': tuple(obj.location), # Actual placed coords
                 'rotation': theta,
-                'pixel_coords': pix,
-            })
+                # 'pixel_coords': pix, # Removed here
+            }) # noqa: E501
         except Exception as e:
             print(f"Error placing object from {glb_file}: {e}")
             # Clean up any objects placed so far
@@ -397,9 +525,9 @@ def add_specified_objects(scene_struct, glb_files, object_coords, args, camera):
                 utils.delete_object(o)
             return None, None
     
-    # Visibility test
+    # Visibility test (runs only based on initial camera pose before looping)
     if not check_visibility(blender_objects, args.min_pixels_per_object):
-        print("Warning: Visibility test failed. Some objects may be occluded or too small.")
+        print("Warning: Initial visibility test failed. Some objects may be occluded or too small from the initial camera pose.") # noqa: E501
         # Instead of recreating the scene like in random placement, we'll log the warning and continue
     
     return objects, blender_objects
@@ -408,12 +536,12 @@ def compute_all_relationships(scene_struct, eps=0.2):
     rels = {}
     for name, direction_vec in scene_struct['directions'].items():
         if name in ('above', 'below'):
-            continue
+            continue # Skip vertical relationships if not needed, or handle differently
         rels[name] = []
         for i, obj1 in enumerate(scene_struct['objects']):
-            coords1 = obj1['3d_coords']
+            coords1 = obj1['3d_coords_transformed'] # Use transformed coords for relationships
             related = [j for j, obj2 in enumerate(scene_struct['objects'])
-                       if i != j and sum((obj2['3d_coords'][k]-coords1[k])*direction_vec[k] for k in range(3)) > eps]
+                       if i != j and sum((Vector(obj2['3d_coords_transformed'])[k]-Vector(coords1)[k])*direction_vec[k] for k in range(3)) > eps] # noqa: E501
             rels[name].append(related)
     return rels
 
