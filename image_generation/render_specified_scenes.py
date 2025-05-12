@@ -108,11 +108,11 @@ parser.add_argument('--width', default=320, type=int,
     help="The width (in pixels) for the rendered images")
 parser.add_argument('--height', default=240, type=int,
     help="The height (in pixels) for the rendered images")
-parser.add_argument('--key_light_jitter', default=1.0, type=float,
+parser.add_argument('--key_light_jitter', default=0.0, type=float,
     help="The magnitude of random jitter to add to the key light position.")
-parser.add_argument('--fill_light_jitter', default=1.0, type=float,
+parser.add_argument('--fill_light_jitter', default=0.0, type=float,
     help="The magnitude of random jitter to add to the fill light position.")
-parser.add_argument('--back_light_jitter', default=1.0, type=float,
+parser.add_argument('--back_light_jitter', default=0.0, type=float,
     help="The magnitude of random jitter to add to the back light position.")
 parser.add_argument('--camera_jitter', default=0.5, type=float,
     help="The magnitude of random jitter to add to the camera position")
@@ -128,6 +128,10 @@ parser.add_argument('--render_tile_size', default=256, type=int,
          "quality of the rendered image but may affect the speed; CPU-based " +
          "rendering may achieve better performance using smaller tile sizes " +
          "while larger tile sizes may be optimal for GPU-based rendering.")
+parser.add_argument('--light_energy_multiplier', type=float, default=1.0,
+    help="Multiply the energy of the Key, Fill, and Back lights by this factor.")
+parser.add_argument('--exposure_offset', type=float, default=0.0,
+    help="Adjust the scene exposure value in color management (positive values increase brightness).")
 
 def main(args):
     random.seed(args.start_idx + int(dt.now().timestamp()))
@@ -305,17 +309,37 @@ def render_scene(args,
     bpy.ops.object.empty_add(location=(0, 0, 0))
     target_empty = bpy.context.object
     target_empty.name = "Camera_Target"
+    
+    # Apply exposure offset
+    if args.exposure_offset != 0.0:
+        print(f"  Applying exposure offset: {args.exposure_offset}")
+        scene.view_settings.exposure = args.exposure_offset
 
     # Jitter lights (object names come from base_scene.blend)
-    for light_name, jitter in [("Lamp_Key", args.key_light_jitter),
-                              ("Lamp_Fill", args.fill_light_jitter),
-                              ("Lamp_Back", args.back_light_jitter)]:
-        if jitter:
-            obj = scene.objects.get(light_name)
-            if obj:
-                obj.location.x += rand(jitter)
-                obj.location.y += rand(jitter)
-                obj.location.z += rand(jitter)
+    light_names = ["Lamp_Key", "Lamp_Fill", "Lamp_Back"]
+    light_jitters = { # Map name to jitter arg
+        "Lamp_Key": args.key_light_jitter,
+        "Lamp_Fill": args.fill_light_jitter,
+        "Lamp_Back": args.back_light_jitter
+    }
+    initial_light_energies = {} # Store original energies
+
+    for light_name in light_names:
+        light_obj = scene.objects.get(light_name)
+        if light_obj and light_obj.data:
+            # Store initial energy before applying multiplier
+            initial_light_energies[light_name] = light_obj.data.energy
+            # Apply energy multiplier
+            if args.light_energy_multiplier != 1.0:
+                light_obj.data.energy *= args.light_energy_multiplier
+                print(f"  Adjusted {light_name} energy to {light_obj.data.energy:.2f}")
+            
+            # Apply jitter
+            jitter = light_jitters.get(light_name, 0.0)
+            if jitter > 0:
+                light_obj.location.x += rand(jitter)
+                light_obj.location.y += rand(jitter)
+                light_obj.location.z += rand(jitter)
 
     # Populate scene with specified objects
     # Pass base_scene_struct - objects list will be populated
@@ -478,6 +502,12 @@ def render_scene(args,
 
     # Clean up the tracking empty AFTER all rendering is done
     utils.delete_object(target_empty)
+
+    # Restore initial light energies (optional, good practice if script reused scene)
+    # for light_name, initial_energy in initial_light_energies.items():
+    #     light_obj = scene.objects.get(light_name)
+    #     if light_obj and light_obj.data:
+    #         light_obj.data.energy = initial_energy
 
 def add_specified_objects(scene_struct, glb_files, object_coords, args): # Removed camera param
     """Place objects at specified positions from the provided glb files."""
