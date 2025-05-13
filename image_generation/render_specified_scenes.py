@@ -243,6 +243,17 @@ def render_scene(args,
     # Load the main blendfile
     bpy.ops.wm.open_mainfile(filepath=args.base_scene_blendfile)
 
+    # Attempt to scale the ground plane object if it exists
+    ground_obj = bpy.data.objects.get("Ground") 
+    if ground_obj:
+        scale_factor = 2.0
+        print(f"  Scaling ground plane object '{{ground_obj.name}}' found in base scene by {{scale_factor}}x on X and Y.")
+        ground_obj.scale.x *= scale_factor 
+        ground_obj.scale.y *= scale_factor 
+        bpy.context.view_layer.update() # Apply scale change
+    else:
+        print("  Warning: Could not find object named 'Ground' to scale in base scene.") 
+
     # Load materials
     utils.load_materials(args.material_dir)
 
@@ -309,6 +320,9 @@ def render_scene(args,
     bpy.ops.object.empty_add(location=(0, 0, 0))
     target_empty = bpy.context.object
     target_empty.name = "Camera_Target"
+    
+    # Reverted: Cardinal cameras simply track the origin (0,0,0)
+    target_empty.location = (0.0, 0.0, 0.0)
     
     # Apply exposure offset
     if args.exposure_offset != 0.0:
@@ -428,7 +442,7 @@ def render_scene(args,
 
     # Define camera positions (radius, height, angles) for the 4 cardinal views
     cam_dist = 7.5 # Default distance in base scene
-    cam_height = 6.0 # Slightly lower than default cam Z=10, adjust as needed
+    cam_height = 6.0 # Reverted to original value as ground plane is now larger.
     angles_deg = [0, 90, 180, 270]
     angles_rad = [math.radians(d) for d in angles_deg]
 
