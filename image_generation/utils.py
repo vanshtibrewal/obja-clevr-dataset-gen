@@ -18,6 +18,7 @@ from __future__ import annotations
 import sys, os, random
 import bpy, bpy_extras
 from mathutils import Vector, Matrix
+import math
 
 # -----------------------------------------------------------------------------
 # Argument helpers (unchanged)
@@ -130,6 +131,87 @@ def add_object_glb(name: str, loc, *, theta=0):
         obj.location = obj.parent.matrix_world.inverted() @ world_new
     else:
         obj.location = world_new
+
+
+import math
+import bpy
+from mathutils import Matrix, Vector
+
+def add_object_glb_scale(
+        name: str,
+        loc,
+        *,
+        theta: float = 0.0,     # rotation about world‑Z in degrees
+        scale: float = 1.0      # uniform scale factor
+    ):
+    """
+    Import a *.glb* file, merge meshes, rotate, scale, and drop so its
+    lowest point sits at the given (x, y, z).
+
+    Parameters
+    ----------
+    name   : str
+        Path (absolute or relative) to the *.glb* file.
+    loc    : tuple[float, float, float]
+        (x, y, z) world‑space position where the mesh’s lowest point
+        should touch the Z plane.
+    theta  : float, optional
+        Rotation around world‑Z in degrees.  Default 0.
+    scale  : float, optional
+        Uniform scale multiplier.  Default 1.
+    """
+    # ------------------------------------------------------------
+    # 1.  import the .glb, merge any mesh children
+    # ------------------------------------------------------------
+    count = sum(o.name.startswith(name) for o in bpy.data.objects)
+    bpy.ops.object.select_all(action='DESELECT')
+    bpy.ops.import_scene.gltf(filepath=name)
+
+    new_objects = list(bpy.context.selected_objects)
+    if not new_objects:
+        raise RuntimeError(f"No objects selected after import of {name}")
+
+    if len(new_objects) > 1:
+        mesh_objects = [o for o in new_objects if o.type == 'MESH']
+        for o in new_objects:
+            if o not in mesh_objects:
+                o.select_set(False)
+        bpy.context.view_layer.objects.active = mesh_objects[0]
+        bpy.ops.object.join()
+
+    obj = bpy.context.view_layer.objects.active
+    obj.name = f"{name}_{count}"
+
+    # ------------------------------------------------------------
+    # 2.  rotate about world‑Z
+    # ------------------------------------------------------------
+    obj.rotation_mode = 'XYZ'
+    Rz_world = Matrix.Rotation(math.radians(theta), 4, 'Z')
+    obj.matrix_world = Rz_world @ obj.matrix_world
+
+    # ------------------------------------------------------------
+    # 3.  uniform scale
+    # ------------------------------------------------------------
+    obj.scale = (scale, scale, scale)
+    bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
+    bpy.context.view_layer.update()
+
+    # ------------------------------------------------------------
+    # 4.  drop so lowest vertex sits on requested Z level
+    # ------------------------------------------------------------
+    x, y, z_target = loc
+    bbox_world = [obj.matrix_world @ Vector(corner) for corner in obj.bound_box]
+    min_z = min(v.z for v in bbox_world)
+
+    world_old = obj.matrix_world.to_translation()
+    world_new = Vector((x, y, z_target + (world_old.z - min_z)))
+
+    if obj.parent:
+        obj.location = obj.parent.matrix_world.inverted() @ world_new
+    else:
+        obj.location = world_new
+
+    return obj  # handy if you want a reference later
 
 
 def add_object(object_dir: str, name: str, scale: float, loc, *, theta=0):
