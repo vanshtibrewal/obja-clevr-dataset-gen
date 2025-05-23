@@ -251,6 +251,13 @@ def render_scene(args,
         ground_obj.scale.x *= scale_factor 
         ground_obj.scale.y *= scale_factor 
         bpy.context.view_layer.update() # Apply scale change
+        # bpy.ops.object.select_all(action='DESELECT')
+        # ground_obj.select_set(True)
+        # bpy.context.view_layer.objects.active = ground_obj
+        # bpy.ops.object.mode_set(mode='EDIT')
+        # bpy.ops.transform.resize(value=(scale_factor, scale_factor, 1)) # keep Z=1
+        # bpy.ops.object.mode_set(mode='OBJECT')
+        # bpy.ops.object.transform_apply(scale=True)
 
         dark_floor_mat = bpy.data.materials.get("DarkFloor")
         if dark_floor_mat is None:
@@ -260,7 +267,7 @@ def render_scene(args,
             links = dark_floor_mat.node_tree.links
             nodes.clear()
             pbsdf  = nodes.new("ShaderNodeBsdfPrincipled")
-            pbsdf.inputs["Base Color"].default_value = (0.18, 0.18, 0.18, 1) # (0.3, 0.3, 0.3, 1)  # medium grey
+            pbsdf.inputs["Base Color"].default_value = (0.5, 0.5, 0.5, 1) # (0.3, 0.3, 0.3, 1)  # medium grey
             pbsdf.inputs["Roughness"].default_value = 0.95                   # very matte
             pbsdf.inputs["Specular"].default_value  = 0.00                   # no hot spots
             out = nodes.new("ShaderNodeOutputMaterial")
@@ -457,8 +464,8 @@ def render_scene(args,
     constraint.up_axis = 'UP_Y'
 
     # Define camera positions (radius, height, angles) for the 4 cardinal views
-    cam_dist = 7.5 # Default distance in base scene
-    cam_height = 6.0 # Reverted to original value as ground plane is now larger.
+    cam_dist = 10.0 # Default distance in base scene
+    cam_height = 7.0 # Reverted to original value as ground plane is now larger.
     angles_deg = [0, 90, 180, 270]
     angles_rad = [math.radians(d) for d in angles_deg]
 

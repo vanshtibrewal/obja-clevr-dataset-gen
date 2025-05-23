@@ -237,7 +237,7 @@ def render_scene(args,
             links = dark_floor_mat.node_tree.links
             nodes.clear()
             pbsdf  = nodes.new("ShaderNodeBsdfPrincipled")
-            pbsdf.inputs["Base Color"].default_value = (0.18, 0.18, 0.18, 1) # (0.3, 0.3, 0.3, 1)  # medium grey
+            pbsdf.inputs["Base Color"].default_value = (0.5, 0.5, 0.5, 1) # (0.3, 0.3, 0.3, 1)  # medium grey
             pbsdf.inputs["Roughness"].default_value = 0.95                   # very matte
             pbsdf.inputs["Specular"].default_value  = 0.00                   # no hot spots
             out = nodes.new("ShaderNodeOutputMaterial")
@@ -421,8 +421,8 @@ def render_scene(args,
     constraint.track_axis = 'TRACK_NEGATIVE_Z'
     constraint.up_axis = 'UP_Y'
 
-    cam_dist = 7.5
-    cam_height = 6.0
+    cam_dist = 10.0 # Default distance in base scene
+    cam_height = 7.0 # Reverted to original value as ground plane is now larger.
     angles_deg = [0, 90, 180, 270]
     angles_rad = [math.radians(d) for d in angles_deg]
 
@@ -489,7 +489,7 @@ def add_single_object(scene_struct, glb_file, object_data, args):
         # utils.add_object_glb now takes (filepath, (x,y), theta)
         # The original add_object_glb seems to handle only x,y for location and then applies z based on bounding box.
         # We'll assume it places object on ground (z=0 effectively before its internal logic)
-        utils.add_object_glb_scale(glb_file, (x, y, -0.025), theta=theta, scale=12) # TODO: change
+        utils.add_object_glb_scale(glb_file, (x, y, -0.05), theta=theta, scale=15) # TODO: change
         
         obj = bpy.context.object # The newly added object
         
